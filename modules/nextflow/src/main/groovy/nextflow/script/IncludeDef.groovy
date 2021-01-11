@@ -19,6 +19,7 @@ package nextflow.script
 
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.Paths
 
 import groovy.transform.Canonical
 import groovy.transform.CompileStatic
@@ -108,10 +109,9 @@ class IncludeDef {
      */
     void load0(ScriptBinding.ParamsMap ownerParams) {
         checkValidPath(path)
-        // -- resolve the concrete against the current script
-        final moduleFile = realModulePath(path)
         // -- load the module
-        final moduleScript = loadModule0(moduleFile, resolveParams(ownerParams), session)
+        final validPath = path as Path
+        final moduleScript = loadModule0(validPath, resolveParams(ownerParams), session)
         // -- add it to the inclusions
         for( Module module : modules ) {
             meta.addModule(moduleScript, module.name, module.alias)
@@ -128,26 +128,28 @@ class IncludeDef {
     }
 
     @PackageScope
-    ScriptMeta getMeta() { ScriptMeta.current() }
+    static ScriptMeta getMeta() { ScriptMeta.current() }
 
     @PackageScope
-    Path getOwnerPath() { getMeta().getScriptPath() }
+    static Path getOwnerPath() { getMeta().getScriptPath() }
 
     @PackageScope
     @Memoized
     static BaseScript loadModule0(Path path, Map params, Session session) {
+        final moduleFile = realModulePath(path, session)
+
         final binding = new ScriptBinding() .setParams(params)
 
         // the execution of a library file has as side effect the registration of declared processes
         new ScriptParser(session)
                 .setModule(true)
                 .setBinding(binding)
-                .runScript(path)
+                .runScript(moduleFile)
                 .getScript()
     }
 
     @PackageScope
-    Path resolveModulePath(include) {
+    static Path resolveModulePath(Path include, Session session) {
         assert include
 
         final result = include as Path
@@ -156,12 +158,17 @@ class IncludeDef {
             throw new IllegalModulePath("Cannot resolve module path: ${result.toUriString()}")
         }
 
-        return getOwnerPath().resolveSibling(include.toString())
+        final str = result.toString()
+        if( str.startsWith('./') || str.startsWith('../') ) {
+            return getOwnerPath().resolveSibling(include.toString())
+        } else {
+            return Paths.get(session.workflowMetadata.projectDir.toString(), str)
+        }
     }
 
     @PackageScope
-    Path realModulePath(include) {
-        def module = resolveModulePath(include)
+    static Path realModulePath(Path include, Session session) {
+        def module = resolveModulePath(include, session)
 
         // check if exists a file with `.nf` extension
         if( !module.name.endsWith('.nf') ) {
@@ -184,10 +191,6 @@ class IncludeDef {
 
         if( path instanceof Path && path.scheme != 'file' )
             throw new IllegalModulePath("Remote modules are not allowed -- Offending module: ${path.toUriString()}")
-
-        final str = path.toString()
-        if( !str.startsWith('/') && !str.startsWith('./') && !str.startsWith('../') )
-            throw new IllegalModulePath("Module path must start with / or ./ prefix -- Offending module: $str")
 
     }
 
